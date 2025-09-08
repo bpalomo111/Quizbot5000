@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>CSV Quiz (Self-Contained, Fixed)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 24px; background:#f7f7fb; color:#111; }
+  h1 { font-size: 28px; margin: 0 0 12px; }
+  .toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:12px 0 16px; }
+  button { padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; }
+  button.primary { background: #6d28d9; color: #fff; border-color:#6d28d9; }
+  button.blue { background: #2563eb; color: #fff; border-color:#2563eb; }
+  button.dark { background: #374151; color: #fff; border-color:#374151; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #status { margin: 10px 0 4px; color: #374151; }
+  #warning { color: #b45309; margin: 4px 0 16px; }
+  .card { background:#fff; border:1px solid #eee; border-radius:12px; padding:16px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .qhead { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px; }
+  .opts { display:flex; flex-direction:column; gap:10px; margin: 10px 0; }
+  .opt { padding:12px; border:1px solid #ddd; border-radius: 10px; background:#fafafa; text-align:left; }
+  .opt.correct { background:#ecfdf5; border-color:#10b981; }
+  .opt.wrong { background:#fef2f2; border-color:#ef4444; }
+  .opt.neutral { background:#f9fafb; color:#6b7280; }
+  .progress { display:flex; align-items:center; gap:10px; }
+  .bar { height: 8px; background:#e5e7eb; border-radius:999px; overflow:hidden; flex:1; }
+  .fill { height: 100%; width:0%; background:#8b5cf6; }
+  .row { display:flex; gap:16px; align-items:center; }
+  .pill { padding: 2px 8px; border:1px solid #ddd; border-radius: 999px; background:#fff; color:#374151; font-size: 12px; }
+
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border:1px solid; border-radius:999px; font-size:12px; }
+  .chip.green { background:#ecfdf5; color:#065f46; border-color:#34d399; }
+  .chip.yellow { background:#fffbeb; color:#92400e; border-color:#fcd34d; }
+  .chip.red { background:#fef2f2; color:#991b1b; border-color:#fca5a5; }
+
+
+  .chkchip { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid #ddd; border-radius:999px; background:#fff; }
+  .chkchip input { transform: scale(1.15); }
+  .chkchip .label { font-size:12px; color:#374151; }
+
+</style>
+</head>
+<body>
+  <h1>CSV Quiz</h1>
+  <div class="toolbar">
+    <input id="file" type="file" accept=".csv" />
+    <button id="shuffleBoth" class="primary">New Shuffle (Qs+Answers)</button>
+    <button id="shuffleQs" class="blue">Shuffle Questions</button>
+    <button id="reset" class="blue">Reset Progress</button>
+    <button id="toggleFilter" class="blue">Filter</button>
+    <button id="hardReset" class="dark">Hard Reset</button>
+  </div>
+
+  <div id="status">Pick a CSV to begin.</div>
+  <div id="warning"></div>
+
+  <!-- Chapter Filter Panel -->
+  <section id="filterPanel" class="card" style="display:none; margin-top:10px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+      <h3 style="margin:0;">Filter by Chapter</h3>
+      <div style="display:flex; gap:8px;">
+        <button id="filterSelectAll">Select All</button>
+        <button id="filterClear">Clear</button>
+        <button id="filterApply" class="primary">Apply Filter</button>
+      </div>
+    </div>
+    <div id="filterChips" style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;"></div>
+    <div id="filterNote" style="color:#6b7280; margin-top:6px; font-size:12px;"></div>
+  </section>
+
+
+  <div id="quiz" class="card" style="display:none">
+    <div class="qhead">
+      <div id="qtitle"></div>
+      <div class="row">
+        <span id="chapter" class="pill"></span>
+        <span id="idxpill" class="pill"></span>
+      </div>
+    </div>
+    <div id="question"></div>
+    <div id="options" class="opts"></div>
+    <div id="feedback" class="card" style="display:none; margin-top:10px; min-height:48px; padding:10px; border:1px solid #eee;"></div>
+    <div class="row">
+      <button id="prev">◀ Prev</button>
+      <button id="next">Next ▶</button>
+    </div>
+    <div class="progress" style="margin-top:10px">
+      <div class="bar"><div id="fill" class="fill"></div></div>
+      <div id="pct" class="pill">0%</div>
+    </div>
+  </div>
+  <!-- Chapter Results Footer -->
+  <section id="resultsFooter" class="card" style="display:none; margin-top:12px; padding:10px;">
+    <div id="chapterChips" style="display:flex; flex-wrap:wrap; gap:8px;"></div>
+  </section>
+
+
+<script>
+// ----- Tiny CSV parser fallback
+function parseCSV(text){
+  const rows = [];
+  let field='', row=[], i=0, inQ=false;
+  const pushField = ()=>{ row.push(field); field=''; };
+  const pushRow = ()=>{ rows.push(row); row=[]; };
+  while(i<text.length){
+    const c = text[i++];
+    if(inQ){
+      if(c === '"'){
+        if(text[i] === '"'){ field+='"'; i++; } else { inQ=false; }
+      } else field += c;
+    } else {
+      if(c === '"'){ inQ = true; }
+      else if(c === ','){ pushField(); }
+      else if(c === '\\r'){ /* ignore */ }
+      else if(c === '\\n'){ pushField(); pushRow(); }
+      else field += c;
+    }
+  }
+  pushField(); pushRow();
+  if(!rows.length) return {headers:[], data:[]};
+  const headers = rows[0].map(h => String(h||'').trim());
+  const data = rows.slice(1).map(r => {
+    const obj = {};
+    for(let k=0;k<headers.length;k++){
+      const key = headers[k] || ('col'+k);
+      obj[key] = String((r[k] ?? '')).trim();
+    }
+    return obj;
+  });
+  return {headers, data};
+}
+
+// ----- App state
+const STORAGE_KEY = 'csv_quiz_state_vX';
+let allQuestions = [];   // parsed & shuffled options per question
+let order = [];          // question order (indices into allQuestions)
+let answers = [];        // chosen option index per order slot
+let idx = 0;
+
+// ----- Helpers
+
+
+// === Completion card helpers ===
+function answeredCount(){ return answers.filter(a => a !== undefined).length; }
+function correctCount(){
+  let c=0;
+  order.forEach((qIdx,pos)=>{
+    const q = allQuestions[qIdx];
+    if(answers[pos] !== undefined && q.correctIdx>=0 && answers[pos] === q.correctIdx) c++;
+  });
+  return c;
+}
+function maybeShowCompleteCard(){
+  const card = document.getElementById('completeCard');
+  const sum = document.getElementById('completeSummary');
+  if(!card || !sum) return;
+  if(answeredCount() === order.length && order.length>0){
+    const c = correctCount();
+    const p = Math.round((100*c)/order.length);
+    sum.textContent = `You answered ${c} out of ${order.length} correctly (${p}%).`;
+    card.style.display = 'block';
+  }else{
+    card.style.display = 'none';
+  }
+}
+
+
+
+// === EXTRA HELPERS (encoding, permutations, explanations, stats) ===
+function invertPerm(perm){ const inv = []; perm.forEach((p,i)=>inv[p]=i); return inv; }
+
+function fixEncodingArtifacts(s){
+  if (s == null) return '';
+  let t = String(s);
+  t = t.replace(/\u00C2/g, '');
+  t = t.replace(/\u00A0/g, ' ');
+  t = t.replace(/[\u2018\u2019]/g, "'");
+  t = t.replace(/[\u201C\u201D]/g, '"');
+  t = t.replace(/\u2013|\u2014/g, '-');
+  t = t.replace(/\s+/g, ' ').trim();
+  return t;
+}
+
+function normalizeText(s){
+  return fixEncodingArtifacts(s).toLowerCase();
+}
+
+function resolveCorrectIndexFromRow(row, optionTexts){
+  const raw = (readCorrect(row) || '').toString().trim();
+  const m = raw.match(/^[A-E]$/i);
+  if(m){ return 'ABCDE'.indexOf(m[0].toUpperCase()); }
+  const norm = normalizeText(raw);
+  for(let i=0;i<optionTexts.length;i++){
+    if(normalizeText(optionTexts[i]) === norm) return i;
+  }
+  for(let i=0;i<optionTexts.length;i++){
+    if(norm && normalizeText(optionTexts[i]).includes(norm)) return i;
+  }
+  return -1;
+}
+
+function getOptionExplanations(row, optsLen){
+  const keys = Object.keys(row||{});
+  const lowerMap = new Map(keys.map(k => [k.toLowerCase().trim(), k]));
+  function pick(names){
+    for(const n of names){
+      const real = lowerMap.get(n.toLowerCase());
+      if(real) return fixEncodingArtifacts(row[real] ?? '');
+    }
+    return '';
+  }
+  const A = pick(['explanation a','explanationa','exp a','expa','explanation_a']);
+  const B = pick(['explanation b','explanationb','exp b','expb','explanation_b']);
+  const C = pick(['explanation c','explanationc','exp c','expc','explanation_c']);
+  const D = pick(['explanation d','explanationd','exp d','expd','explanation_d']);
+  let exps = [A,B,C,D];
+  if(exps.every(x => !x)){
+    const explKeys = keys.filter(k => k.toLowerCase().startsWith('explanation'));
+    exps = explKeys.slice(0, optsLen).map(k => fixEncodingArtifacts(row[k] ?? ''));
+  }
+  while(exps.length < optsLen) exps.push('');
+  return exps.slice(0, optsLen);
+}
+
+// --- Chapter chips ---
+function computeChapterStats(){
+  const stats = new Map();
+  order.forEach((qIdx, pos) => {
+    const q = allQuestions[qIdx];
+    const ch = q.chapter || '';
+    if(!stats.has(ch)) stats.set(ch, {correct:0,total:0});
+    const s = stats.get(ch);
+    s.total += 1;
+    if(answers[pos] !== undefined && q.correctIdx >= 0 && answers[pos] === q.correctIdx){
+      s.correct += 1;
+    }
+  });
+  return stats;
+}
+function pct(n,d){ return d ? Math.round(100*n/d) : 0; }
+function chipClassForPct(p){
+  if(p >= 90) return 'chip green';
+  if(p >= 50) return 'chip yellow';
+  return 'chip red';
+}
+function renderChapterChips(){
+  const footer = document.getElementById('resultsFooter');
+  const wrap = document.getElementById('chapterChips');
+  if(!footer || !wrap){ return; }
+  if(!order.length){ footer.style.display='none'; return; }
+  const stats = computeChapterStats();
+  wrap.innerHTML = '';
+  const keys = Array.from(stats.keys()).sort((a,b)=>(a||'').localeCompare(b||''));
+  keys.forEach(ch => {
+    const {correct,total} = stats.get(ch);
+    const p = pct(correct,total);
+    const el = document.createElement('span');
+    el.className = chipClassForPct(p);
+    el.innerHTML = `<strong>${ch || '—'}</strong>&nbsp; ${correct}/${total} &nbsp;(${p}%)`;
+    wrap.appendChild(el);
+  });
+  footer.style.display='block';
+}
+
+const $ = sel => document.querySelector(sel);
+function shuffle(arr){ return arr.map(v => [Math.random(), v]).sort((a,b)=>a[0]-b[0]).map(p=>p[1]); }
+function letter(i){ return String.fromCharCode(65+i); }
+function readCorrect(rec){
+  const keys = Object.keys(rec||{});
+  for(const k of keys){
+    const nk = (k||'').toString().trim().toLowerCase();
+    if(nk==='correct' || nk==='correct answer' || nk==='correct answere' || nk==='answer' || nk==='ans'){
+      const v = rec[k];
+      if(v != null && String(v).trim().length) return String(v).trim();
+    }
+  }
+  return '';
+}
+
+// ----- Core builder
+
+function buildQuestions(rows){
+  const built = rows.map(r => {
+    const choices = ['A','B','C','D','E'].map(L => ({
+      label: L, text: fixEncodingArtifacts((r[L] ?? r[L?.toLowerCase?.()] ?? '').toString())
+    })).filter(o => o.text.length);
+
+    let originalCorrectIdx = -1;
+    {
+      const raw = readCorrect(r) || '';
+      const letterMatch = (raw.toUpperCase().match(/^[A-E]$/) || [])[0] || '';
+      if(letterMatch) originalCorrectIdx = choices.findIndex(o => o.label === letterMatch);
+      if(originalCorrectIdx === -1 && raw){
+        originalCorrectIdx = choices.findIndex(o => o.text.toLowerCase() === String(raw).toLowerCase());
+      }
+      if(originalCorrectIdx === -1){
+        const alt = resolveCorrectIndexFromRow(r, choices.map(c=>c.text));
+        if(alt >= 0) originalCorrectIdx = alt;
+      }
+    }
+
+    const perm = shuffle([...Array(choices.length).keys()]);
+    const inv = invertPerm(perm);
+    const options = perm.map(i => choices[i].text);
+    const correctIdx = originalCorrectIdx >= 0 ? perm.indexOf(originalCorrectIdx) : -1;
+    const exps = getOptionExplanations(r, choices.length);
+
+    return {
+      chapter: fixEncodingArtifacts(r.chapter || r.Chapter || ''),
+      question: fixEncodingArtifacts(r.question || r.Question || ''),
+      options,
+      originalOptions: choices.map(o=>o.text),
+      perm,
+      inv,
+      exps,
+      originalCorrectIdx,
+      correctIdx
+    };
+  }).filter(q => q.question && q.options.length);
+  return built;
+}
+
+
+
+// ----- Chapter Filter -----
+const FILTER_KEY = STORAGE_KEY + ':chapters';
+
+function uniqueChapters(list){
+  const set = new Set(list.map(s => (s || '').toString()));
+  return Array.from(set).sort((a,b)=>(a||'').localeCompare(b||''));
+}
+
+function buildChapterChips(){
+  const cont = document.getElementById('filterChips');
+  if(!cont) return;
+  cont.innerHTML = '';
+  const chapters = uniqueChapters(allQuestions.map(q => q.chapter || '—'));
+  // restore selected from localStorage or default to all
+  let selected = [];
+  try{ selected = JSON.parse(localStorage.getItem(FILTER_KEY) || '[]'); }catch(_){ selected = []; }
+  if(!selected.length) selected = chapters.slice();
+
+  chapters.forEach(ch => {
+    const id = 'chk_' + btoa(encodeURIComponent(ch)).replace(/=+$/,'');
+    const span = document.createElement('label');
+    span.className = 'chkchip';
+    span.innerHTML = `<input type="checkbox" id="${id}" ${selected.includes(ch)?'checked':''}> <span class="label">${ch || '—'}</span>`;
+    cont.appendChild(span);
+  });
+  const note = document.getElementById('filterNote');
+  if(note) note.textContent = `(${chapters.length} chapters found)`;
+}
+
+function getSelectedChapters(){
+  const cont = document.getElementById('filterChips');
+  if(!cont) return [];
+  return Array.from(cont.querySelectorAll('input[type="checkbox"]'))
+    .filter(cb => cb.checked)
+    .map(cb => cb.nextElementSibling?.textContent || '');
+}
+
+function applyChapterFilter(){
+  const sel = getSelectedChapters();
+  // Save selection
+  try{ localStorage.setItem(FILTER_KEY, JSON.stringify(sel)); }catch(_){}
+  // Build new order
+  const newOrder = [];
+  allQuestions.forEach((q, i) => {
+    const ch = q.chapter || '—';
+    if(!sel.length || sel.includes(ch)) newOrder.push(i);
+  });
+  order = newOrder;
+  answers = Array(order.length).fill(undefined);
+  idx = 0;
+  render();
+  saveState();
+  renderChapterChips();
+  // Update status line to reflect filter
+  const status = document.getElementById('status');
+  if(status){
+    status.textContent = `Showing ${order.length} of ${allQuestions.length} questions` + (sel.length?` (filtered)`:'') + '.';
+  }
+}
+
+function initFilterUI(){
+  const btn = document.getElementById('toggleFilter');
+  const panel = document.getElementById('filterPanel');
+  if(btn && panel){
+    btn.onclick = () => {
+      panel.style.display = (panel.style.display==='none' || !panel.style.display) ? 'block' : 'none';
+      if(panel.style.display==='block') buildChapterChips();
+    };
+  }
+  const selAll = document.getElementById('filterSelectAll');
+  const clear = document.getElementById('filterClear');
+  const apply = document.getElementById('filterApply');
+  if(selAll) selAll.onclick = () => {
+    buildChapterChips();
+    document.querySelectorAll('#filterChips input[type="checkbox"]').forEach(cb => cb.checked = true);
+  };
+  if(clear) clear.onclick = () => {
+    document.querySelectorAll('#filterChips input[type="checkbox"]').forEach(cb => cb.checked = false);
+  };
+  if(apply) apply.onclick = () => applyChapterFilter();
+}
+
+// Rebuild chips after CSV load and also on 'New Shuffle (Qs+Answers)' which rebuilds questions
+document.addEventListener('DOMContentLoaded', () => {
+  initFilterUI();
+});
+
+
+// Completion card actions
+document.addEventListener('DOMContentLoaded', () => {
+  const btnR = document.getElementById('btnRestart');
+  if(btnR) btnR.onclick = () => { answers = Array(order.length).fill(undefined); idx = 0; render(); saveState(); renderChapterChips(); maybeShowCompleteCard(); maybeShowCompleteCard(); };
+  const btnW = document.getElementById('btnReviewWrong');
+  if(btnW) btnW.onclick = () => {
+    // keep only wrong/blank questions
+    const newOrder = [];
+    order.forEach((qIdx,pos)=>{
+      const q = allQuestions[qIdx];
+      if(answers[pos] === undefined || (q.correctIdx>=0 && answers[pos] !== q.correctIdx)) newOrder.push(qIdx);
+    });
+    order = newOrder;
+    answers = Array(order.length).fill(undefined);
+    idx = 0;
+    render();
+    saveState();
+    renderChapterChips();
+    maybeShowCompleteCard();
+  };
+});
+
+// ----- Rendering
+function render(){
+  if(!order.length){ $('#quiz').style.display='none'; return; }
+  $('#quiz').style.display='block';
+  const q = allQuestions[order[idx]];
+  $('#qtitle').textContent = 'Question';
+  $('#chapter').textContent = q.chapter || '—';
+  $('#idxpill').textContent = (idx+1) + ' / ' + order.length;
+  $('#question').textContent = q.question;
+  const opts = $('#options'); opts.innerHTML=''; const fbEl=document.getElementById('feedback'); if(fbEl) fbEl.style.display='none';
+  q.options.forEach((txt, i) => {
+    const b = document.createElement('button');
+    b.className = 'opt';
+    b.textContent = letter(i) + ') ' + txt;
+    b.onclick = () => choose(i);
+    opts.appendChild(b);
+  });
+  // recolor if already answered
+  if(answers[idx] !== undefined){
+    styleResult(q.correctIdx, answers[idx]);
+  }
+  updateProgress(); renderChapterChips(); maybeShowCompleteCard();
+}
+function styleResult(correctIdx, chosenIdx){
+  [...$('#options').children].forEach((el,i)=>{
+    el.disabled = true;
+    el.className = 'opt neutral';
+    if(correctIdx === -1){
+      if(i === chosenIdx) el.className = 'opt'; // neutral highlight
+    } else {
+      if(i === correctIdx) el.className = 'opt correct';
+      else if(i === chosenIdx) el.className = 'opt wrong';
+    }
+  });
+}
+function choose(i){
+  const q = allQuestions[order[idx]];
+  answers[idx] = i;
+  styleResult(q.correctIdx, i);
+
+  const fb = document.getElementById('feedback');
+  if(fb && q && q.exps){
+    const origChosen = (q.perm && q.perm[i] !== undefined) ? q.perm[i] : i;
+    const expChosen = q.exps[origChosen] || '';
+    const expCorrect = (q.originalCorrectIdx>=0) ? (q.exps[q.originalCorrectIdx] || '') : '';
+    let out = '';
+    if(expChosen) out += `<div><strong>Your choice:</strong> ${expChosen}</div>`;
+    if(q.correctIdx>=0 && i!==q.correctIdx && expCorrect) out += `<div style="margin-top:6px;"><strong>Correct answer note:</strong> ${expCorrect}</div>`;
+    if(out){ fb.innerHTML = out; fb.style.display='block'; } else { fb.style.display='none'; }
+  }
+
+  saveState();
+  renderChapterChips();
+  updateProgress();
+  maybeShowCompleteCard();
+}
+function updateProgress(){
+  const done = answers.filter(a => a !== undefined).length;
+  const pct = order.length ? Math.round(100*done/order.length) : 0;
+  $('#fill').style.width = pct + '%';
+  $('#pct').textContent = pct + '%';
+}
+function saveState(){
+  const state = { order, answers, idx, timestamp: Date.now() };
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){}
+}
+
+// ----- Controls
+$('#prev').onclick = () => { if(idx>0){ idx--; render(); saveState(); renderChapterChips(); maybeShowCompleteCard(); } };
+$('#next').onclick = () => { if(idx<order.length-1){ idx++; render(); saveState(); renderChapterChips(); maybeShowCompleteCard(); } };
+$('#reset').onclick = () => { answers = Array(order.length).fill(undefined); idx = 0; buildChapterChips(); try{ const saved = JSON.parse(localStorage.getItem(FILTER_KEY)||'[]'); if(saved && saved.length){ applyChapterFilter(); } else { render(); saveState(); renderChapterChips(); maybeShowCompleteCard(); } }catch(_){ render(); saveState(); renderChapterChips(); maybeShowCompleteCard(); } renderChapterChips(); const fbEl=document.getElementById('feedback'); if(fbEl) fbEl.style.display='none'; };
+$('#hardReset').onclick = () => { try{ localStorage.removeItem(STORAGE_KEY);}catch(e){}; location.reload(); };
+$('#shuffleQs').onclick = () => {
+  const prev = order[idx];
+  order = shuffle([...order]);                    // shuffle order only
+  answers = Array(order.length).fill(undefined);  // clear answers
+  idx = 0;
+  if (order.length > 1 && order[idx] === prev) {  // ensure visible change at first render
+    idx = 1;
+  }
+  render();
+  saveState();
+  renderChapterChips();
+  maybeShowCompleteCard();
+  const fbEl = document.getElementById('feedback');
+  if(fbEl) fbEl.style.display='none';
+};
+$('#shuffleBoth').onclick = () => {
+  // Re-build with new per-question option permutations
+  allQuestions = buildQuestions(allQuestions.map(q => ({
+    chapter: q.chapter, question: q.question,
+    A: q.originalOptions[0]||'', B: q.originalOptions[1]||'',
+    C: q.originalOptions[2]||'', D: q.originalOptions[3]||'',
+    E: q.originalOptions[4]||'',
+    correct: q.originalCorrectIdx>=0 ? ['A','B','C','D','E'][q.originalCorrectIdx] : ''
+  })));
+  // Start with all questions; filter (if saved) will apply below
+  order = shuffle([...Array(allQuestions.length).keys()]);
+  answers = Array(order.length).fill(undefined);
+  idx = 0;
+  buildChapterChips();
+  // Re-apply saved filter once (if any)
+  try {
+    const saved = JSON.parse(localStorage.getItem(FILTER_KEY) || '[]');
+    if (saved && saved.length) {
+      applyChapterFilter();
+      return;
+    }
+  } catch (_) {}
+  render();
+  saveState();
+  renderChapterChips();
+};
+
+// ----- File loader
+$('#file').addEventListener('change', async (ev) => {
+  const file = ev.target.files[0];
+  if(!file){ return; }
+  $('#status').textContent = 'Parsing "'+file.name+'"...';
+  try{
+    // Try PapaParse if available, else fallback
+    let rows = null;
+    if (window.Papa) {
+      rows = await new Promise((resolve, reject) => {
+        Papa.parse(file, { header:true, skipEmptyLines:true, complete: r => resolve(r.data), error: reject });
+      });
+    } else {
+      const txt = await file.text();
+      rows = parseCSV(txt).data;
+    }
+    allQuestions = buildQuestions(rows);
+    order = shuffle([...Array(allQuestions.length).keys()]);
+    answers = Array(order.length).fill(undefined);
+    idx = 0;
+    const bad = allQuestions.filter(q => q.originalCorrectIdx<0).length;
+    $('#status').textContent = bad ?
+      ('Loaded '+allQuestions.length+' questions from "'+file.name+'". (⚠ '+bad+' with missing/invalid correct key)')
+      : ('Loaded '+allQuestions.length+' questions from "'+file.name+'".');
+    $('#warning').textContent = '';
+    buildChapterChips(); try{ const saved = JSON.parse(localStorage.getItem(FILTER_KEY)||'[]'); if(saved && saved.length){ applyChapterFilter(); } else { render(); saveState(); renderChapterChips(); maybeShowCompleteCard(); } }catch(_){ render(); saveState(); renderChapterChips(); maybeShowCompleteCard(); }
+  }catch(err){
+    $('#status').textContent = 'Error reading CSV: ' + err;
+  }
+});
+
+// ----- Error to status
+window.addEventListener('error', function(e){
+  const s = document.getElementById('status');
+  if(s) s.textContent = '⚠ Script error: ' + (e.message || e.error);
+});
+</script>
+<!-- PapaParse optional (ok if blocked) -->
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+  <!-- Completion Card -->
+  <section id="completeCard" class="card" style="display:none; margin-top:12px;">
+    <h3 style="margin:0 0 8px 0;">All done 🎉</h3>
+    <div id="completeSummary" style="color:#374151; margin-bottom:10px;"></div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button id="btnReviewWrong">Review Wrong Only</button>
+      <button id="btnRestart" class="primary">Restart</button>
+    </div>
+  </section>
+
+</body>
+</html>
